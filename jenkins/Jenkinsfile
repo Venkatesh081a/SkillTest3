@@ -1,0 +1,50 @@
+pipeline {
+  agent any
+
+  environment {
+    AWS_ACCESS_KEY_ID = credentials("aws-access-key-id")
+    AWS_SECRET_ACCESS_KEY = credentials("aws-secret-access-key")
+  }
+  
+  stages {
+    stage('Provision Infrastructure') {
+      steps {
+        dir('terraform') {
+          sh 'terraform init'
+          sh 'terraform apply -auto-approve'
+        }
+      }
+    }
+    
+    stage('Deploy Backend') {
+      steps {
+        script{
+            def backendIp = sh(script:'terraform output -raw backend_ip', returnStdout:true).trim()
+            sh "scp -i /key.pem -o StrictHostKeyChecking=no scripts/backend_setup.sh ubuntu@${backendIp}:/home/ubuntu"
+            sh "scp -i /key.pem -o StrictHostKeyChecking=no scripts/backend_setup.sh ubuntu@${backendIp} 'bash /home/ubuntu/backend_setup.sh'"
+        }
+      }
+    }
+    
+    stage('Deploy Frontend') {
+      steps {
+        script{
+            def frontendIp = sh(script:'terraform output -raw frontend_ip', returnStdout:true).trim()
+            def backendIp = sh(script:'terraform output -raw backend_ip', returnStdout:true).trim()
+            sh "scp -i /key.pem -o StrictHostKeyChecking=no scripts/frontend_setup.sh ubuntu@${frontendIp}:/home/ubuntu"
+            sh "scp -i /key.pem -o StrictHostKeyChecking=no scripts/frontend_setup.sh ubuntu@${frontendIp} 'sed -i \"s|<backend_ip>|${backendIp}|g\" /home/ubuntu/frontend_setup.sh'"
+            sh "scp -i /key.pem -o StrictHostKeyChecking=no scripts/frontend_setup.sh ubuntu@${frontendIp} 'bash /home/ubuntu/frontend_setup.sh'"
+        }
+      }
+    }
+
+    stage('Validation') {
+      steps {
+        script{
+            def frontendIp = sh(script:'terraform output -raw frontend_ip', returnStdout:true).trim()
+            sh "curl -f http://${frontendIp}"
+        }
+      }
+    }
+  }
+}
